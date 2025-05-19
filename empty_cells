@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Usage: ./empty_cells <file> <sep>
+
+# Check for correct number of arguments
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <data_file> <delimiter>"
+    exit 1
+fi
+
+# Input file and delimiter
+data_file="$1"
+delimiter="$2"
+
+# Verify the input file exists
+if [ ! -f "$data_file" ]; then
+    echo "Error: File '$data_file' not found."
+    exit 1
+fi
+
+# Create a temporary file to handle line endings
+clean_data_file=$(mktemp)
+tr -d '\r' < "$data_file" > "$clean_data_file"
+
+# Extract header row to get column names
+IFS="$delimiter" read -r -a column_headers < "$clean_data_file"
+total_columns=${#column_headers[@]}
+
+# Initialize empty cell counters
+missing_cell_counts=()
+for ((col=0; col<total_columns; col++)); do
+    missing_cell_counts[col]=0
+done
+
+# Process each row (excluding header)
+while IFS="$delimiter" read -r -a data_row; do
+    # Pad short rows to match column count
+    for ((col=${#data_row[@]}; col<total_columns; col++)); do
+        data_row[col]=""
+    done
+
+    # Trim spaces and count empty cells
+    for ((col=0; col<total_columns; col++)); do
+        cell_value="${data_row[col]}"
+        cell_value="${cell_value##*( )}"
+        cell_value="${cell_value%%*( )}"
+        if [ -z "$cell_value" ]; then
+            (( missing_cell_counts[col]++ ))
+        fi
+    done
+done < <(tail -n +2 "$clean_data_file")
+
+# Print the empty cell counts for each column
+for ((col=0; col<total_columns; col++)); do
+    echo "${column_headers[col]}: ${missing_cell_counts[col]}"
+done
+
+# Clean up temporary file
+rm "$clean_data_file"
