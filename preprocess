@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# Check for one argument
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <inputfile.txt>" >&2
+    exit 1
+fi
+
+input_path="$1"
+
+# Validate file existence
+if [ ! -f "$input_path" ]; then
+    echo "Error: File '$input_path' not found." >&2
+    exit 1
+fi
+
+# Output to stdout unless redirected
+output_path="/dev/stdout"
+
+# Determine internal file name if not redirected
+if [ -t 1 ]; then
+    base_out="out_$(basename "$input_path" .txt).tsv"
+    output_path="$base_out"
+fi
+
+# Temp files for staged processing
+temp1=$(mktemp)
+temp2=$(mktemp)
+
+# 1. Remove Windows carriage returns
+tr -d '\r' < "$input_path" > "$temp1"
+
+# 2. Convert semicolons to tabs for .txt files
+if [[ "$input_path" == *.txt ]]; then
+    sed 's/;/\t/g' "$temp1" > "$temp2"
+else
+    cp "$temp1" "$temp2"
+fi
+
+# 3. Convert commas to periods in numeric fields
+awk 'BEGIN {FS=OFS="\t"}
+{
+    for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+,[0-9]+$/) {
+            $i = gensub(",", ".", "g", $i)
+        }
+    }
+    print
+}' "$temp2" > "$temp1"
+
+# 4. Fix missing or invalid IDs and skip correlation rows
+awk -v orig="$input_path" '
+BEGIN {FS=OFS="\t"; max_id=0}
+NR == 1 {
+    print
+    next
+}
+NR == 2 {
+    while ((getline line < orig) > 0) {
+        split(line, f, /[\t;]/)
+        if (f[1] ~ /^[0-9]+$/ && f[1] > max_id) {
+            max_id = f[1]
+        }
+    }
+    close(orig)
+}
+{
+    if ($2 == "" && $3 == "" && $4 == "" && $5 == "") next
+    if ($1 == "" || $1 == "/ID") {
+        $1 = ++max_id
+    } else if ($1 ~ /^[0-9]+$/ && $1 > max_id) {
+        max_id = $1
+    }
+    print
+}' "$temp1" > "$temp2"
+
+# 5. Remove non-ASCII characters
+tr -cd '\11\12\40-\176' < "$temp2" > "$temp1"
+
+# 6. Quote Mechanics and Domains for tiny_clean.tsv files
+if [[ "$input_path" == *"tiny_clean"* ]]; then
+    awk 'BEGIN {FS=OFS="\t"}
+    NR == 1 { print; next }
+    {
+        if ($13 != "" && $13 !~ /^"/) $13 = "\"" $13 "\""
+        if ($14 != "" && $14 !~ /^"/) $14 = "\"" $14 "\""
+        print
+    }' "$temp1" > "$temp2"
+else
+    cp "$temp1" "$temp2"
+fi
+
+# 7. Remove trailing blank lines
+awk 'NF > 0' "$temp2" > "$temp1"
+
+# 8. Output final result
+cat "$temp1" > "$output_path"
+
+# Cleanup
+rm -f "$temp1" "$temp2"
+
+
